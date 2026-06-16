@@ -253,6 +253,7 @@ impl NFO<'_> {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
 
@@ -321,7 +322,7 @@ mod tests {
 </tvshow>"#,
         );
         assert_eq!(
-            NFO::Upper(((&video, &video.uppers().next().unwrap())).to_nfo(NFOTimeType::FavTime))
+            NFO::Upper((&video, &video.uppers().next().unwrap()).to_nfo(NFOTimeType::FavTime))
                 .generate_nfo()
                 .await
                 .unwrap(),

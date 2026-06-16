@@ -218,6 +218,10 @@ pub struct VideoSourceDetail {
     pub rule_display: Option<String>,
     #[serde(default)]
     pub use_dynamic_api: Option<bool>,
+    #[serde(default, rename = "download_dynamic_posts")]
+    pub download_dynamic_posts: Option<bool>,
+    #[serde(default, rename = "dynamic_posts_path")]
+    pub dynamic_posts_path: Option<String>,
     pub enabled: bool,
     pub latest_row_at: Option<DateTime>,
 }

@@ -72,7 +72,9 @@
 		path: '',
 		enabled: false,
 		rule: null as Rule | null,
-		useDynamicApi: null as boolean | null
+		useDynamicApi: null as boolean | null,
+		downloadDynamicPosts: null as boolean | null,
+		dynamicPostsPath: ''
 	};
 
 	// 表单数据
@@ -111,6 +113,8 @@
 			path: source.path,
 			enabled: source.enabled,
 			useDynamicApi: source.useDynamicApi,
+			downloadDynamicPosts: source.download_dynamic_posts,
+			dynamicPostsPath: source.dynamic_posts_path ?? '',
 			rule: source.rule
 		};
 		showEditDialog = true;
@@ -181,7 +185,9 @@
 				path: editForm.path,
 				enabled: editForm.enabled,
 				rule: editForm.rule,
-				useDynamicApi: editForm.useDynamicApi
+				useDynamicApi: editForm.useDynamicApi,
+				download_dynamic_posts: editForm.downloadDynamicPosts,
+				dynamic_posts_path: editForm.downloadDynamicPosts ? editForm.dynamicPostsPath : null
 			});
 			// 更新本地数据
 			if (videoSourcesData && editingSource) {
@@ -194,6 +200,8 @@
 					enabled: editForm.enabled,
 					rule: editForm.rule,
 					useDynamicApi: editForm.useDynamicApi,
+					download_dynamic_posts: editForm.downloadDynamicPosts,
+					dynamic_posts_path: editForm.downloadDynamicPosts ? editForm.dynamicPostsPath : null,
 					ruleDisplay: response.data.ruleDisplay
 				};
 				videoSourcesData = { ...videoSourcesData };
@@ -586,6 +594,30 @@
 								</Tooltip.Content>
 							</Tooltip.Root>
 						</div>
+					</div>
+				{/if}
+
+				<!-- 图文动态配置 -->
+				{#if editingType === 'submissions' && editForm.downloadDynamicPosts !== null}
+					<div class="space-y-3">
+						<div class="flex items-center space-x-2">
+							<Switch bind:checked={editForm.downloadDynamicPosts} />
+							<Label class="text-sm font-medium">下载图文动态</Label>
+						</div>
+						{#if editForm.downloadDynamicPosts}
+							<div>
+								<Label for="edit-dynamic-posts-path" class="text-sm font-medium">
+									图文动态下载路径
+								</Label>
+								<Input
+									id="edit-dynamic-posts-path"
+									type="text"
+									bind:value={editForm.dynamicPostsPath}
+									placeholder="请输入图文动态下载路径"
+									class="mt-2"
+								/>
+							</div>
+						{/if}
 					</div>
 				{/if}
 

@@ -10,7 +10,7 @@ pub(super) fn default_auth_token() -> String {
 }
 
 pub(crate) fn default_bind_address() -> String {
-    "0.0.0.0:12345".to_string()
+    "0.0.0.0:49231".to_string()
 }
 
 pub(super) fn default_time_format() -> String {

@@ -130,6 +130,8 @@ pub async fn get_video_sources_details(
                 submission::Column::Enabled,
                 submission::Column::Rule,
                 submission::Column::UseDynamicApi,
+                submission::Column::DownloadDynamicPosts,
+                submission::Column::DynamicPostsPath,
                 submission::Column::LatestRowAt
             ])
             .into_model::<VideoSourceDetail>()
@@ -155,6 +157,8 @@ pub async fn get_video_sources_details(
             rule: None,
             rule_display: None,
             use_dynamic_api: None,
+            download_dynamic_posts: None,
+            dynamic_posts_path: None,
             enabled: false,
             latest_row_at: None,
         })
@@ -220,6 +224,12 @@ pub async fn update_video_source(
             active_model.rule = Set(request.rule);
             if let Some(use_dynamic_api) = request.use_dynamic_api {
                 active_model.use_dynamic_api = Set(use_dynamic_api);
+            }
+            if let Some(download_dynamic_posts) = request.download_dynamic_posts {
+                active_model.download_dynamic_posts = Set(download_dynamic_posts);
+            }
+            if let Some(dynamic_posts_path) = request.dynamic_posts_path {
+                active_model.dynamic_posts_path = Set(dynamic_posts_path);
             }
             _ActiveModel::Submission(active_model)
         }),

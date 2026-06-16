@@ -223,6 +223,8 @@ export interface VideoSourceDetail {
 	rule: Rule | null;
 	ruleDisplay: string | null;
 	useDynamicApi: boolean | null;
+	download_dynamic_posts: boolean | null;
+	dynamic_posts_path: string | null;
 	enabled: boolean;
 	latestRowAt: string | null;
 }
@@ -239,6 +241,8 @@ export interface UpdateVideoSourceRequest {
 	enabled: boolean;
 	rule?: Rule | null;
 	useDynamicApi?: boolean | null;
+	download_dynamic_posts?: boolean | null;
+	dynamic_posts_path?: string | null;
 }
 
 export interface Credential {

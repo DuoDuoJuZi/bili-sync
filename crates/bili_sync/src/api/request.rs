@@ -139,6 +139,10 @@ pub struct UpdateVideoSourceRequest {
     pub enabled: bool,
     pub rule: Option<Rule>,
     pub use_dynamic_api: Option<bool>,
+    #[serde(rename = "download_dynamic_posts")]
+    pub download_dynamic_posts: Option<bool>,
+    #[serde(rename = "dynamic_posts_path")]
+    pub dynamic_posts_path: Option<Option<String>>,
 }
 
 #[derive(Serialize, Deserialize)]
