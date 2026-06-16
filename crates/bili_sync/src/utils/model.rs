@@ -173,6 +173,7 @@ async fn upsert_dynamic_post(
             let mut active_model: dynamic_post::ActiveModel = model.into();
             active_model.upper_id = Set(post.author_mid);
             active_model.upper_name = Set(post.author_name.clone());
+            active_model.title = Set(post.title.clone());
             active_model.pub_time = Set(post.pub_time.naive_utc());
             active_model.content = Set(post.text.clone());
             active_model.raw_json = Set(raw_json);
@@ -186,6 +187,7 @@ async fn upsert_dynamic_post(
                 dynamic_id: Set(post.dynamic_id.clone()),
                 upper_id: Set(post.author_mid),
                 upper_name: Set(post.author_name.clone()),
+                title: Set(post.title.clone()),
                 pub_time: Set(post.pub_time.naive_utc()),
                 content: Set(post.text.clone()),
                 raw_json: Set(raw_json),
@@ -230,6 +232,21 @@ async fn upsert_dynamic_post_images(
         created_count += 1;
     }
     Ok(created_count)
+}
+
+pub async fn update_dynamic_post_image_local_path(
+    image_id: i32,
+    local_path: String,
+    connection: &DatabaseConnection,
+) -> Result<dynamic_post_image::Model> {
+    let now = chrono::Utc::now().naive_utc();
+    let active_model = dynamic_post_image::ActiveModel {
+        id: Set(image_id),
+        local_path: Set(Some(local_path)),
+        updated_at: Set(now),
+        ..Default::default()
+    };
+    Ok(active_model.update(connection).await?)
 }
 
 fn usize_to_u32_saturating(value: usize) -> u32 {

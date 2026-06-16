@@ -11,6 +11,7 @@ pub struct Model {
     pub dynamic_id: String,
     pub upper_id: i64,
     pub upper_name: String,
+    pub title: Option<String>,
     pub pub_time: DateTime,
     pub content: String,
     pub raw_json: String,

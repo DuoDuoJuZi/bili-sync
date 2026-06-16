@@ -19,6 +19,7 @@ pub struct DynamicPost {
     pub author_mid: i64,
     pub author_name: String,
     pub pub_time: DateTime<Utc>,
+    pub title: Option<String>,
     pub text: String,
     pub images: Vec<DynamicPostImage>,
     pub raw_json: Value,
@@ -186,11 +187,26 @@ impl DynamicPost {
             author_mid,
             author_name,
             pub_time,
+            title: extract_title(item),
             text: extract_text(item),
             images: extract_images(item),
             raw_json: item.clone(),
         }))
     }
+}
+
+fn extract_title(item: &Value) -> Option<String> {
+    let explicit_title = [
+        "/modules/module_dynamic/major/opus/title",
+        "/modules/module_dynamic/major/article/title",
+        "/modules/module_dynamic/major/archive/title",
+        "/modules/module_dynamic/major/common/title",
+        "/modules/module_dynamic/major/live_rcmd/title",
+    ]
+    .into_iter()
+    .filter_map(|path| normalize_title(item.pointer(path)?.as_str()?))
+    .next();
+    explicit_title.or_else(|| fallback_title_from_text(&extract_text(item)))
 }
 
 fn extract_text(item: &Value) -> String {
@@ -203,6 +219,23 @@ fn extract_text(item: &Value) -> String {
     .find(|text| !text.is_empty())
     .unwrap_or_default()
     .to_string()
+}
+
+fn fallback_title_from_text(text: &str) -> Option<String> {
+    let title = text.lines().next()?.trim();
+    if title.is_empty() || title.chars().count() > 40 {
+        return None;
+    }
+    Some(title.to_string())
+}
+
+fn normalize_title(title: &str) -> Option<String> {
+    let title = title.trim();
+    if title.is_empty() {
+        None
+    } else {
+        Some(title.to_string())
+    }
 }
 
 fn extract_images(item: &Value) -> Vec<DynamicPostImage> {
