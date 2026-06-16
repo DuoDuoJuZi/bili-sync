@@ -2,9 +2,9 @@ use anyhow::{Context, Result, anyhow};
 use bili_sync_entity::*;
 use rand::seq::SliceRandom;
 use sea_orm::ActiveValue::Set;
-use sea_orm::DatabaseTransaction;
 use sea_orm::entity::prelude::*;
 use sea_orm::sea_query::{OnConflict, SimpleExpr};
+use sea_orm::{DatabaseTransaction, QueryOrder};
 
 use crate::adapter::{VideoSource, VideoSourceEnum};
 use crate::bilibili::{DynamicPost, VideoInfo};
@@ -16,6 +16,19 @@ pub struct SaveDynamicPostsResult {
     pub created_count: usize,
     pub updated_count: usize,
     pub created_image_count: usize,
+}
+
+pub async fn list_dynamic_posts_with_images(
+    source_id: i32,
+    connection: &DatabaseConnection,
+) -> Result<Vec<(dynamic_post::Model, Vec<dynamic_post_image::Model>)>> {
+    dynamic_post::Entity::find()
+        .filter(dynamic_post::Column::SourceId.eq(source_id))
+        .order_by_desc(dynamic_post::Column::PubTime)
+        .find_with_related(dynamic_post_image::Entity)
+        .all(connection)
+        .await
+        .context("list dynamic posts with images failed")
 }
 
 /// 筛选未填充的视频

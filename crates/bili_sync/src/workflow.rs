@@ -10,6 +10,7 @@ use futures::{Stream, StreamExt, TryStreamExt};
 use sea_orm::ActiveValue::Set;
 use sea_orm::TransactionTrait;
 use sea_orm::entity::prelude::*;
+use serde::Serialize;
 use tokio::fs;
 use tokio::sync::Semaphore;
 
@@ -22,8 +23,8 @@ use crate::notifier::DownloadNotifyInfo;
 use crate::utils::download_context::DownloadContext;
 use crate::utils::format_arg::{page_format_args, video_format_args};
 use crate::utils::model::{
-    create_pages, create_videos, filter_unfilled_videos, filter_unhandled_video_pages, save_dynamic_posts,
-    update_pages_model, update_videos_model,
+    create_pages, create_videos, filter_unfilled_videos, filter_unhandled_video_pages, list_dynamic_posts_with_images,
+    save_dynamic_posts, update_pages_model, update_videos_model,
 };
 use crate::utils::nfo::{NFO, ToNFO};
 use crate::utils::notify::notify;
@@ -115,7 +116,110 @@ async fn scan_dynamic_posts(
             post.images.len()
         );
     }
+    write_dynamic_post_files(submission, connection).await?;
     Ok(())
+}
+
+#[derive(Serialize)]
+struct DynamicPostMetadata<'a> {
+    dynamic_id: &'a str,
+    source_id: i32,
+    upper_id: i64,
+    upper_name: &'a str,
+    pub_time: String,
+    content: &'a str,
+    image_count: u32,
+    images: Vec<DynamicPostImageMetadata<'a>>,
+}
+
+#[derive(Serialize)]
+struct DynamicPostImageMetadata<'a> {
+    url: &'a str,
+    width: u32,
+    height: u32,
+    local_path: Option<&'a str>,
+}
+
+async fn write_dynamic_post_files(submission: &submission::Model, connection: &DatabaseConnection) -> Result<()> {
+    let source_name = submission.display_name();
+    let Some(dynamic_posts_path) = submission
+        .dynamic_posts_path
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+    else {
+        warn!(
+            "「{}」已启用图文/文字动态下载，但未配置图文动态下载路径，跳过文件输出",
+            source_name
+        );
+        return Ok(());
+    };
+
+    info!("开始写入「{}」投稿图文/文字动态文件..", source_name);
+    let dynamic_posts = list_dynamic_posts_with_images(submission.id, connection).await?;
+    let base_path = PathBuf::from(dynamic_posts_path);
+    for (post, images) in &dynamic_posts {
+        debug!(
+            "写入「{}」投稿图文/文字动态文件：dynamic_id={}",
+            source_name, post.dynamic_id
+        );
+        write_dynamic_post_file(&base_path, post, images).await?;
+    }
+    info!(
+        "写入「{}」投稿图文/文字动态文件完成，处理 {} 条动态",
+        source_name,
+        dynamic_posts.len()
+    );
+    Ok(())
+}
+
+async fn write_dynamic_post_file(
+    base_path: &Path,
+    post: &dynamic_post::Model,
+    images: &[dynamic_post_image::Model],
+) -> Result<()> {
+    let post_path = base_path.join(format!("{}_{}", post.pub_time.format("%Y-%m-%d"), post.dynamic_id));
+    fs::create_dir_all(&post_path)
+        .await
+        .with_context(|| format!("failed to create dynamic post directory {}", post_path.display()))?;
+
+    let metadata = DynamicPostMetadata {
+        dynamic_id: &post.dynamic_id,
+        source_id: post.source_id,
+        upper_id: post.upper_id,
+        upper_name: &post.upper_name,
+        pub_time: post.pub_time.to_string(),
+        content: &post.content,
+        image_count: post.image_count,
+        images: images
+            .iter()
+            .map(|image| DynamicPostImageMetadata {
+                url: &image.url,
+                width: image.width,
+                height: image.height,
+                local_path: image.local_path.as_deref(),
+            })
+            .collect(),
+    };
+    let metadata_json = serde_json::to_string_pretty(&metadata).context("serialize dynamic post metadata failed")?;
+    fs::write(post_path.join("metadata.json"), metadata_json)
+        .await
+        .with_context(|| format!("failed to write dynamic post metadata {}", post.dynamic_id))?;
+
+    fs::write(post_path.join("index.md"), render_dynamic_post_markdown(post, images))
+        .await
+        .with_context(|| format!("failed to write dynamic post markdown {}", post.dynamic_id))?;
+    Ok(())
+}
+
+fn render_dynamic_post_markdown(post: &dynamic_post::Model, images: &[dynamic_post_image::Model]) -> String {
+    let mut markdown = format!(
+        "# {} 的图文动态\n\n发布时间：{}\n动态 ID：{}\nUP 主：{}\n\n---\n\n{}\n\n---\n\n",
+        post.upper_name, post.pub_time, post.dynamic_id, post.upper_name, post.content
+    );
+    for (idx, image) in images.iter().enumerate() {
+        markdown.push_str(&format!("![图片 {}]({})\n", idx + 1, image.url));
+    }
+    markdown
 }
 
 /// 请求接口，获取视频列表中所有新添加的视频信息，将其写入数据库
@@ -853,4 +957,95 @@ async fn generate_nfo(nfo: NFO<'_>, nfo_path: PathBuf) -> Result<()> {
     }
     fs::write(nfo_path, nfo.generate_nfo().await?.as_bytes()).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod dynamic_post_file_tests {
+    use super::*;
+    use bili_sync_migration::{Migrator, MigratorTrait};
+    use sea_orm::{ActiveValue::Set, Database};
+
+    fn test_time() -> DateTime {
+        chrono::NaiveDate::from_ymd_opt(2023, 6, 28)
+            .and_then(|date| date.and_hms_opt(12, 34, 56))
+            .unwrap()
+    }
+
+    fn test_submission(dynamic_posts_path: Option<String>) -> submission::Model {
+        submission::Model {
+            id: 42,
+            upper_id: 1001,
+            upper_name: "测试UP".to_string(),
+            path: String::new(),
+            created_at: String::new(),
+            use_dynamic_api: false,
+            download_dynamic_posts: true,
+            dynamic_posts_path,
+            latest_row_at: test_time(),
+            rule: None,
+            enabled: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn write_dynamic_post_files_creates_readable_metadata_and_markdown() {
+        let connection = Database::connect("sqlite::memory:").await.unwrap();
+        Migrator::up(&connection, None).await.unwrap();
+
+        let post = dynamic_post::ActiveModel {
+            source_id: Set(42),
+            dynamic_id: Set("812190908525051908".to_string()),
+            upper_id: Set(1001),
+            upper_name: Set("测试UP".to_string()),
+            pub_time: Set(test_time()),
+            content: Set("今天也有橘子。".to_string()),
+            raw_json: Set(r#"{"id":"812190908525051908"}"#.to_string()),
+            image_count: Set(1),
+            ..Default::default()
+        }
+        .insert(&connection)
+        .await
+        .unwrap();
+
+        dynamic_post_image::ActiveModel {
+            dynamic_post_id: Set(post.id),
+            url: Set("https://example.com/image.jpg".to_string()),
+            width: Set(640),
+            height: Set(480),
+            local_path: Set(None),
+            ..Default::default()
+        }
+        .insert(&connection)
+        .await
+        .unwrap();
+
+        let output_path = std::env::temp_dir().join(format!("bili_sync_dynamic_post_test_{}", uuid::Uuid::new_v4()));
+        let submission = test_submission(Some(output_path.to_string_lossy().to_string()));
+
+        write_dynamic_post_files(&submission, &connection).await.unwrap();
+        write_dynamic_post_files(&submission, &connection).await.unwrap();
+
+        let post_path = output_path.join("2023-06-28_812190908525051908");
+        let metadata = fs::read_to_string(post_path.join("metadata.json")).await.unwrap();
+        let markdown = fs::read_to_string(post_path.join("index.md")).await.unwrap();
+
+        assert!(metadata.contains(r#""dynamic_id": "812190908525051908""#));
+        assert!(metadata.contains(r#""local_path": null"#));
+        assert!(markdown.contains("# 测试UP 的图文动态"));
+        assert!(markdown.contains("![图片 1](https://example.com/image.jpg)"));
+
+        let _ = fs::remove_dir_all(output_path).await;
+    }
+
+    #[tokio::test]
+    async fn write_dynamic_post_files_skips_empty_path() {
+        let connection = Database::connect("sqlite::memory:").await.unwrap();
+
+        write_dynamic_post_files(&test_submission(None), &connection)
+            .await
+            .unwrap();
+        write_dynamic_post_files(&test_submission(Some(String::new())), &connection)
+            .await
+            .unwrap();
+    }
 }
