@@ -124,7 +124,11 @@ pub async fn get_enabled_video_sources(connection: &DatabaseConnection) -> Resul
             .filter(watch_later::Column::Enabled.eq(true))
             .all(connection),
         submission::Entity::find()
-            .filter(submission::Column::Enabled.eq(true))
+            .filter(
+                submission::Column::Enabled
+                    .eq(true)
+                    .or(submission::Column::DownloadDynamicPosts.eq(true)),
+            )
             .all(connection),
         collection::Entity::find()
             .filter(collection::Column::Enabled.eq(true))

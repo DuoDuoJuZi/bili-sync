@@ -11,7 +11,7 @@ pub use client::{BiliClient, Client};
 pub use collection::{Collection, CollectionItem, CollectionType};
 pub use credential::{Credential, PollStatus, Qrcode};
 pub use danmaku::DanmakuOption;
-pub use dynamic::{Dynamic, DynamicPost, DynamicPostImage};
+pub use dynamic::{Dynamic, DynamicPost};
 pub use error::BiliError;
 pub use favorite_list::FavoriteList;
 pub use me::Me;
