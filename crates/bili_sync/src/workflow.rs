@@ -14,7 +14,9 @@ use tokio::fs;
 use tokio::sync::Semaphore;
 
 use crate::adapter::{VideoSource, VideoSourceEnum};
-use crate::bilibili::{BestStream, BiliClient, BiliError, Dimension, PageInfo, Video, VideoInfo};
+use crate::bilibili::{
+    BestStream, BiliClient, BiliError, Dimension, Dynamic, DynamicPost, DynamicPostImage, PageInfo, Video, VideoInfo,
+};
 use crate::config::{ARGS, Config, PathSafeTemplate};
 use crate::downloader::Downloader;
 use crate::error::ExecutionStatus;
@@ -46,6 +48,7 @@ pub async fn process_video_source(
         .await?;
     // 从视频流中获取新视频的简要信息，写入数据库
     refresh_video_source(&video_source, video_streams, connection).await?;
+    scan_dynamic_posts_if_enabled(bili_client, &video_source, config).await?;
     // 单独请求视频详情接口，获取视频的详情信息与所有的分页，写入数据库
     fetch_video_details(bili_client, &video_source, connection, config).await?;
     if ARGS.scan_only {
@@ -57,6 +60,39 @@ pub async fn process_video_source(
         if download_notify_info.should_notify() {
             notify(config, bili_client, download_notify_info);
         }
+    }
+    Ok(())
+}
+
+async fn scan_dynamic_posts_if_enabled(
+    bili_client: &BiliClient,
+    video_source: &VideoSourceEnum,
+    config: &Config,
+) -> Result<()> {
+    let VideoSourceEnum::Submission(submission) = video_source else {
+        return Ok(());
+    };
+    if !submission.download_dynamic_posts {
+        return Ok(());
+    }
+
+    let posts: Vec<DynamicPost> = Dynamic::new(bili_client, submission.upper_id.to_string(), &config.credential)
+        .into_post_stream()
+        .try_collect::<Vec<_>>()
+        .await?;
+    info!(
+        "扫描{}图文/文字动态完成，找到 {} 条图文/文字动态",
+        submission.display_name(),
+        posts.len()
+    );
+    for post in posts {
+        let images: &[DynamicPostImage] = &post.images;
+        info!(
+            "图文/文字动态 dynamic_id={}，发布时间={}，图片数量={}",
+            post.dynamic_id,
+            post.pub_time.format("%Y-%m-%d %H:%M:%S"),
+            images.len()
+        );
     }
     Ok(())
 }
