@@ -22,8 +22,8 @@ use crate::notifier::DownloadNotifyInfo;
 use crate::utils::download_context::DownloadContext;
 use crate::utils::format_arg::{page_format_args, video_format_args};
 use crate::utils::model::{
-    create_pages, create_videos, filter_unfilled_videos, filter_unhandled_video_pages, update_pages_model,
-    update_videos_model,
+    create_pages, create_videos, filter_unfilled_videos, filter_unhandled_video_pages, save_dynamic_posts,
+    update_pages_model, update_videos_model,
 };
 use crate::utils::nfo::{NFO, ToNFO};
 use crate::utils::notify::notify;
@@ -42,7 +42,7 @@ pub async fn process_video_source(
         && !submission.enabled
     {
         if submission.download_dynamic_posts {
-            scan_dynamic_posts(bili_client, submission, config).await?;
+            scan_dynamic_posts(bili_client, submission, connection, config).await?;
         }
         return Ok(());
     }
@@ -58,7 +58,7 @@ pub async fn process_video_source(
     if let VideoSourceEnum::Submission(submission) = &video_source
         && submission.download_dynamic_posts
     {
-        scan_dynamic_posts(bili_client, submission, config).await?;
+        scan_dynamic_posts(bili_client, submission, connection, config).await?;
     }
     // 单独请求视频详情接口，获取视频的详情信息与所有的分页，写入数据库
     fetch_video_details(bili_client, &video_source, connection, config).await?;
@@ -75,7 +75,12 @@ pub async fn process_video_source(
     Ok(())
 }
 
-async fn scan_dynamic_posts(bili_client: &BiliClient, submission: &submission::Model, config: &Config) -> Result<()> {
+async fn scan_dynamic_posts(
+    bili_client: &BiliClient,
+    submission: &submission::Model,
+    connection: &DatabaseConnection,
+    config: &Config,
+) -> Result<()> {
     let source_name = submission.display_name();
     info!("开始扫描{}图文/文字动态..", source_name);
     let posts: Vec<DynamicPost> = Dynamic::new(bili_client, submission.upper_id.to_string(), &config.credential)
@@ -87,12 +92,26 @@ async fn scan_dynamic_posts(bili_client: &BiliClient, submission: &submission::M
         source_name,
         posts.len()
     );
-    for post in posts {
+    for post in &posts {
         debug!(
             "扫描到{}图文/文字动态：dynamic_id={}，发布时间={}，图片数量={}",
             source_name,
             post.dynamic_id,
             post.pub_time.format("%Y-%m-%d %H:%M:%S"),
+            post.images.len()
+        );
+    }
+    info!("开始保存{}图文/文字动态..", source_name);
+    let save_result = save_dynamic_posts(submission.id, &posts, connection).await?;
+    info!(
+        "保存{}图文/文字动态完成，新增 {} 条，更新 {} 条，图片新增 {} 张",
+        source_name, save_result.created_count, save_result.updated_count, save_result.created_image_count
+    );
+    for post in &posts {
+        debug!(
+            "保存{}图文/文字动态：dynamic_id={}，图片数量={}",
+            source_name,
+            post.dynamic_id,
             post.images.len()
         );
     }

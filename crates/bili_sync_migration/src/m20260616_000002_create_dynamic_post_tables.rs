@@ -1,0 +1,155 @@
+use sea_orm_migration::prelude::*;
+
+#[derive(DeriveMigrationName)]
+pub struct Migration;
+
+#[async_trait::async_trait]
+impl MigrationTrait for Migration {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .create_table(
+                Table::create()
+                    .table(DynamicPost::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(DynamicPost::Id)
+                            .unsigned()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
+                    .col(ColumnDef::new(DynamicPost::SourceId).integer().not_null())
+                    .col(ColumnDef::new(DynamicPost::DynamicId).string().not_null())
+                    .col(ColumnDef::new(DynamicPost::UpperId).big_integer().not_null())
+                    .col(ColumnDef::new(DynamicPost::UpperName).string().not_null())
+                    .col(ColumnDef::new(DynamicPost::PubTime).timestamp().not_null())
+                    .col(ColumnDef::new(DynamicPost::Content).text().not_null())
+                    .col(ColumnDef::new(DynamicPost::RawJson).text().not_null())
+                    .col(ColumnDef::new(DynamicPost::ImageCount).unsigned().not_null())
+                    .col(
+                        ColumnDef::new(DynamicPost::CreatedAt)
+                            .timestamp()
+                            .default(Expr::current_timestamp())
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(DynamicPost::UpdatedAt)
+                            .timestamp()
+                            .default(Expr::current_timestamp())
+                            .not_null(),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .table(DynamicPost::Table)
+                    .name("idx_dynamic_post_source_id_dynamic_id")
+                    .col(DynamicPost::SourceId)
+                    .col(DynamicPost::DynamicId)
+                    .unique()
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_table(
+                Table::create()
+                    .table(DynamicPostImage::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(DynamicPostImage::Id)
+                            .unsigned()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
+                    .col(ColumnDef::new(DynamicPostImage::DynamicPostId).integer().not_null())
+                    .col(ColumnDef::new(DynamicPostImage::Url).string().not_null())
+                    .col(ColumnDef::new(DynamicPostImage::Width).unsigned().not_null())
+                    .col(ColumnDef::new(DynamicPostImage::Height).unsigned().not_null())
+                    .col(ColumnDef::new(DynamicPostImage::LocalPath).string())
+                    .col(
+                        ColumnDef::new(DynamicPostImage::CreatedAt)
+                            .timestamp()
+                            .default(Expr::current_timestamp())
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(DynamicPostImage::UpdatedAt)
+                            .timestamp()
+                            .default(Expr::current_timestamp())
+                            .not_null(),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .table(DynamicPostImage::Table)
+                    .name("idx_dynamic_post_image_post_id_url")
+                    .col(DynamicPostImage::DynamicPostId)
+                    .col(DynamicPostImage::Url)
+                    .unique()
+                    .to_owned(),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .drop_index(
+                Index::drop()
+                    .table(DynamicPostImage::Table)
+                    .name("idx_dynamic_post_image_post_id_url")
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .drop_table(Table::drop().table(DynamicPostImage::Table).to_owned())
+            .await?;
+        manager
+            .drop_index(
+                Index::drop()
+                    .table(DynamicPost::Table)
+                    .name("idx_dynamic_post_source_id_dynamic_id")
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .drop_table(Table::drop().table(DynamicPost::Table).to_owned())
+            .await?;
+        Ok(())
+    }
+}
+
+#[derive(DeriveIden)]
+enum DynamicPost {
+    Table,
+    Id,
+    SourceId,
+    DynamicId,
+    UpperId,
+    UpperName,
+    PubTime,
+    Content,
+    RawJson,
+    ImageCount,
+    CreatedAt,
+    UpdatedAt,
+}
+
+#[derive(DeriveIden)]
+enum DynamicPostImage {
+    Table,
+    Id,
+    DynamicPostId,
+    Url,
+    Width,
+    Height,
+    LocalPath,
+    CreatedAt,
+    UpdatedAt,
+}

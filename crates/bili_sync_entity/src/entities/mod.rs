@@ -4,6 +4,8 @@ pub mod prelude;
 
 pub mod collection;
 pub mod config;
+pub mod dynamic_post;
+pub mod dynamic_post_image;
 pub mod favorite;
 pub mod page;
 pub mod submission;

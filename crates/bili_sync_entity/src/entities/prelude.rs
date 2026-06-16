@@ -3,3 +3,4 @@
 pub use super::favorite::Entity as Favorite;
 pub use super::page::Entity as Page;
 pub use super::video::Entity as Video;
+pub use super::{dynamic_post::Entity as DynamicPost, dynamic_post_image::Entity as DynamicPostImage};

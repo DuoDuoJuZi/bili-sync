@@ -7,9 +7,16 @@ use sea_orm::entity::prelude::*;
 use sea_orm::sea_query::{OnConflict, SimpleExpr};
 
 use crate::adapter::{VideoSource, VideoSourceEnum};
-use crate::bilibili::VideoInfo;
+use crate::bilibili::{DynamicPost, VideoInfo};
 use crate::config::Config;
 use crate::utils::status::STATUS_COMPLETED;
+
+#[derive(Debug, Default)]
+pub struct SaveDynamicPostsResult {
+    pub created_count: usize,
+    pub updated_count: usize,
+    pub created_image_count: usize,
+}
 
 /// 筛选未填充的视频
 pub async fn filter_unfilled_videos(
@@ -112,6 +119,112 @@ pub async fn update_pages_model(pages: Vec<page::ActiveModel>, connection: &Data
     );
     query.exec(connection).await?;
     Ok(())
+}
+
+pub async fn save_dynamic_posts(
+    source_id: i32,
+    posts: &[DynamicPost],
+    connection: &DatabaseConnection,
+) -> Result<SaveDynamicPostsResult> {
+    let mut result = SaveDynamicPostsResult::default();
+    for post in posts {
+        let (dynamic_post, created) = upsert_dynamic_post(source_id, post, connection).await?;
+        if created {
+            result.created_count += 1;
+        } else {
+            result.updated_count += 1;
+        }
+        result.created_image_count += upsert_dynamic_post_images(dynamic_post.id, post, connection).await?;
+    }
+    Ok(result)
+}
+
+async fn upsert_dynamic_post(
+    source_id: i32,
+    post: &DynamicPost,
+    connection: &DatabaseConnection,
+) -> Result<(dynamic_post::Model, bool)> {
+    let raw_json = serde_json::to_string(&post.raw_json).context("serialize dynamic post raw json failed")?;
+    let image_count = usize_to_u32_saturating(post.images.len());
+    let now = chrono::Utc::now().naive_utc();
+    let existing = dynamic_post::Entity::find()
+        .filter(
+            dynamic_post::Column::SourceId
+                .eq(source_id)
+                .and(dynamic_post::Column::DynamicId.eq(post.dynamic_id.as_str())),
+        )
+        .one(connection)
+        .await?;
+    match existing {
+        Some(model) => {
+            let mut active_model: dynamic_post::ActiveModel = model.into();
+            active_model.upper_id = Set(post.author_mid);
+            active_model.upper_name = Set(post.author_name.clone());
+            active_model.pub_time = Set(post.pub_time.naive_utc());
+            active_model.content = Set(post.text.clone());
+            active_model.raw_json = Set(raw_json);
+            active_model.image_count = Set(image_count);
+            active_model.updated_at = Set(now);
+            Ok((active_model.update(connection).await?, false))
+        }
+        None => {
+            let active_model = dynamic_post::ActiveModel {
+                source_id: Set(source_id),
+                dynamic_id: Set(post.dynamic_id.clone()),
+                upper_id: Set(post.author_mid),
+                upper_name: Set(post.author_name.clone()),
+                pub_time: Set(post.pub_time.naive_utc()),
+                content: Set(post.text.clone()),
+                raw_json: Set(raw_json),
+                image_count: Set(image_count),
+                updated_at: Set(now),
+                ..Default::default()
+            };
+            Ok((active_model.insert(connection).await?, true))
+        }
+    }
+}
+
+async fn upsert_dynamic_post_images(
+    dynamic_post_id: i32,
+    post: &DynamicPost,
+    connection: &DatabaseConnection,
+) -> Result<usize> {
+    let mut created_count = 0;
+    for image in &post.images {
+        let exists = dynamic_post_image::Entity::find()
+            .filter(
+                dynamic_post_image::Column::DynamicPostId
+                    .eq(dynamic_post_id)
+                    .and(dynamic_post_image::Column::Url.eq(image.url.as_str())),
+            )
+            .one(connection)
+            .await?
+            .is_some();
+        if exists {
+            continue;
+        }
+        dynamic_post_image::ActiveModel {
+            dynamic_post_id: Set(dynamic_post_id),
+            url: Set(image.url.clone()),
+            width: Set(u64_to_u32_saturating(image.width)),
+            height: Set(u64_to_u32_saturating(image.height)),
+            local_path: Set(None),
+            ..Default::default()
+        }
+        .insert(connection)
+        .await?;
+        created_count += 1;
+    }
+    Ok(created_count)
+}
+
+fn usize_to_u32_saturating(value: usize) -> u32 {
+    value.try_into().unwrap_or(u32::MAX)
+}
+
+fn u64_to_u32_saturating(value: u64) -> u32 {
+    value.try_into().unwrap_or(u32::MAX)
 }
 
 /// 获取所有已经启用的视频源
