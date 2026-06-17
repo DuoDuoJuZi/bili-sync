@@ -10,7 +10,7 @@ use futures::{Stream, StreamExt, TryStreamExt};
 use sea_orm::ActiveValue::Set;
 use sea_orm::TransactionTrait;
 use sea_orm::entity::prelude::*;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio::sync::Semaphore;
 
@@ -83,34 +83,31 @@ async fn scan_dynamic_posts(
     config: &Config,
 ) -> Result<()> {
     let source_name = submission.display_name();
-    info!("开始扫描{}图文/文字动态..", source_name);
+    info!("开始扫描{}动态..", source_name);
     let posts: Vec<DynamicPost> = Dynamic::new(bili_client, submission.upper_id.to_string(), &config.credential)
         .into_post_stream()
         .try_collect::<Vec<_>>()
         .await?;
-    info!(
-        "扫描{}图文/文字动态完成，获取到 {} 条图文/文字动态",
-        source_name,
-        posts.len()
-    );
+    info!("扫描{}动态完成，获取到 {} 条新动态", source_name, posts.len());
     for post in &posts {
         debug!(
-            "扫描到{}图文/文字动态：dynamic_id={}，发布时间={}，图片数量={}",
+            "扫描到{}动态：dynamic_id={}，发布时间={}，图片数量={}",
             source_name,
             post.dynamic_id,
             post.pub_time.format("%Y-%m-%d %H:%M:%S"),
             post.images.len()
         );
     }
-    info!("开始保存{}图文/文字动态..", source_name);
+    info!("开始填充{}动态..", source_name);
     let save_result = save_dynamic_posts(submission.id, &posts, connection).await?;
-    info!(
-        "保存{}图文/文字动态完成，新增 {} 条，更新 {} 条，图片新增 {} 张",
+    info!("填充{}图文动态完成", source_name);
+    debug!(
+        "填充{}图文动态完成：新增 {} 条，更新 {} 条，图片新增 {} 张",
         source_name, save_result.created_count, save_result.updated_count, save_result.created_image_count
     );
     for post in &posts {
         debug!(
-            "保存{}图文/文字动态：dynamic_id={}，图片数量={}",
+            "填充{}图文动态：dynamic_id={}，图片数量={}",
             source_name,
             post.dynamic_id,
             post.images.len()
@@ -141,11 +138,21 @@ struct DynamicPostImageMetadata<'a> {
     local_path: Option<&'a str>,
 }
 
+#[derive(Deserialize)]
+struct DynamicPostMetadataIdentity {
+    dynamic_id: String,
+}
+
 #[derive(Default)]
 struct DynamicPostImageDownloadStats {
     success_count: usize,
     skipped_count: usize,
     failed_count: usize,
+}
+
+struct DynamicPostOutputTarget {
+    display_name: String,
+    path: PathBuf,
 }
 
 async fn process_dynamic_post_files(
@@ -172,36 +179,30 @@ async fn process_dynamic_post_files(
     let mut dynamic_posts = list_dynamic_posts_with_images(submission.id, connection).await?;
 
     info!("开始下载{}图文动态图片..", source_name);
-    let mut download_stats = DynamicPostImageDownloadStats::default();
     for (post, images) in &mut dynamic_posts {
-        let post_path = dynamic_post_path(&base_path, post);
-        let stats =
-            download_dynamic_post_images(&source_name, &post_path, post, images, &downloader, connection, config)
-                .await?;
-        download_stats.success_count += stats.success_count;
-        download_stats.skipped_count += stats.skipped_count;
-        download_stats.failed_count += stats.failed_count;
+        let target = dynamic_post_output_target(&base_path, post).await?;
+        let stats = download_dynamic_post_images(
+            &target.display_name,
+            &target.path,
+            post,
+            images,
+            &downloader,
+            connection,
+            config,
+        )
+        .await?;
+        info!(
+            "处理「{}」投稿动态图片完成，成功 {} 张，跳过 {} 张，失败 {} 张",
+            target.display_name, stats.success_count, stats.skipped_count, stats.failed_count
+        );
+        write_dynamic_post_file(&target.path, post, images).await?;
+        info!("处理「{}」投稿动态文件完成", target.display_name);
     }
-    info!(
-        "下载{}图文动态图片完成，成功 {} 张，跳过 {} 张，失败 {} 张",
-        source_name, download_stats.success_count, download_stats.skipped_count, download_stats.failed_count
-    );
-
-    info!("开始写入{}图文/文字动态文件..", source_name);
-    for (post, images) in &dynamic_posts {
-        debug!("写入{}图文/文字动态文件：dynamic_id={}", source_name, post.dynamic_id);
-        write_dynamic_post_file(&base_path, post, images).await?;
-    }
-    info!(
-        "写入{}图文/文字动态文件完成，处理 {} 条动态",
-        source_name,
-        dynamic_posts.len()
-    );
     Ok(())
 }
 
 async fn download_dynamic_post_images(
-    source_name: &str,
+    dynamic_display_name: &str,
     post_path: &Path,
     post: &dynamic_post::Model,
     images: &mut [dynamic_post_image::Model],
@@ -220,8 +221,8 @@ async fn download_dynamic_post_images(
         if image.local_path.is_some() && fs::try_exists(&absolute_path).await.unwrap_or(false) {
             stats.skipped_count += 1;
             debug!(
-                "下载{}图文动态图片：dynamic_id={}，url={}，local_path={}",
-                source_name, post.dynamic_id, image.url, relative_path
+                "处理「{}」投稿动态图片：dynamic_id={}，url={}，local_path={}",
+                dynamic_display_name, post.dynamic_id, image.url, relative_path
             );
             continue;
         }
@@ -231,8 +232,8 @@ async fn download_dynamic_post_images(
                 *image = update_dynamic_post_image_local_path(image.id, relative_path.clone(), connection).await?;
             }
             debug!(
-                "下载{}图文动态图片：dynamic_id={}，url={}，local_path={}",
-                source_name, post.dynamic_id, image.url, relative_path
+                "处理「{}」投稿动态图片：dynamic_id={}，url={}，local_path={}",
+                dynamic_display_name, post.dynamic_id, image.url, relative_path
             );
             continue;
         }
@@ -244,15 +245,15 @@ async fn download_dynamic_post_images(
                 *image = update_dynamic_post_image_local_path(image.id, relative_path.clone(), connection).await?;
                 stats.success_count += 1;
                 debug!(
-                    "下载{}图文动态图片：dynamic_id={}，url={}，local_path={}",
-                    source_name, post.dynamic_id, image.url, relative_path
+                    "处理「{}」投稿动态图片：dynamic_id={}，url={}，local_path={}",
+                    dynamic_display_name, post.dynamic_id, image.url, relative_path
                 );
             }
             Err(e) => {
                 stats.failed_count += 1;
                 warn!(
-                    "下载{}图文动态图片失败：dynamic_id={}，url={}，错误={:#}",
-                    source_name, post.dynamic_id, image.url, e
+                    "处理「{}」投稿动态图片失败，url={}，错误={:#}",
+                    dynamic_display_name, image.url, e
                 );
             }
         }
@@ -261,11 +262,10 @@ async fn download_dynamic_post_images(
 }
 
 async fn write_dynamic_post_file(
-    base_path: &Path,
+    post_path: &Path,
     post: &dynamic_post::Model,
     images: &[dynamic_post_image::Model],
 ) -> Result<()> {
-    let post_path = dynamic_post_path(base_path, post);
     fs::create_dir_all(&post_path)
         .await
         .with_context(|| format!("failed to create dynamic post directory {}", post_path.display()))?;
@@ -318,23 +318,53 @@ fn render_dynamic_post_markdown(post: &dynamic_post::Model, images: &[dynamic_po
     markdown
 }
 
-fn dynamic_post_path(base_path: &Path, post: &dynamic_post::Model) -> PathBuf {
-    let fallback_name = fallback_dynamic_post_dir_name(post);
-    let Some(title) = post.title.as_deref().and_then(sanitize_dynamic_post_title) else {
-        return base_path.join(fallback_name);
-    };
-    let title_name = format!("{}_{}", title, post.dynamic_id);
-    let title_path = base_path.join(&title_name);
-    let fallback_path = base_path.join(&fallback_name);
-    if fallback_path.exists() && !title_path.exists() {
-        fallback_path
-    } else {
-        title_path
+async fn dynamic_post_output_target(base_path: &Path, post: &dynamic_post::Model) -> Result<DynamicPostOutputTarget> {
+    if let Some(title) = post.title.as_deref().and_then(sanitize_dynamic_post_title) {
+        return resolve_dynamic_post_output_target(base_path, &title, post, false).await;
     }
+    let fallback_name = post.pub_time.format("%Y-%m-%d_%H-%M-%S").to_string();
+    resolve_dynamic_post_output_target(base_path, &fallback_name, post, true).await
 }
 
-fn fallback_dynamic_post_dir_name(post: &dynamic_post::Model) -> String {
-    format!("{}_{}", post.pub_time.format("%Y-%m-%d"), post.dynamic_id)
+async fn resolve_dynamic_post_output_target(
+    base_path: &Path,
+    base_name: &str,
+    post: &dynamic_post::Model,
+    always_suffix_index: bool,
+) -> Result<DynamicPostOutputTarget> {
+    for index in 1.. {
+        let display_name = if always_suffix_index {
+            format!("{}_{:02}", base_name, index)
+        } else if index == 1 {
+            base_name.to_string()
+        } else {
+            format!("{}_{:02}", base_name, index)
+        };
+        let path = base_path.join(&display_name);
+        if can_use_dynamic_post_path(&path, &post.dynamic_id).await? {
+            return Ok(DynamicPostOutputTarget { display_name, path });
+        }
+    }
+    unreachable!("unbounded dynamic post output directory search should always return")
+}
+
+async fn can_use_dynamic_post_path(path: &Path, dynamic_id: &str) -> Result<bool> {
+    if !fs::try_exists(path).await.unwrap_or(false) {
+        return Ok(true);
+    }
+    let metadata_path = path.join("metadata.json");
+    if !fs::try_exists(&metadata_path).await.unwrap_or(false) {
+        return Ok(false);
+    }
+    let Ok(metadata) = fs::read_to_string(&metadata_path).await else {
+        warn!("无法读取动态图文元数据 {}，跳过该目录名", metadata_path.display());
+        return Ok(false);
+    };
+    let Ok(identity) = serde_json::from_str::<DynamicPostMetadataIdentity>(&metadata) else {
+        warn!("无法解析动态图文元数据 {}，跳过该目录名", metadata_path.display());
+        return Ok(false);
+    };
+    Ok(identity.dynamic_id == dynamic_id)
 }
 
 fn sanitize_dynamic_post_title(title: &str) -> Option<String> {
