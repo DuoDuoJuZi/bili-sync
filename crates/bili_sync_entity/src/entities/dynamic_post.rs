@@ -12,6 +12,7 @@ pub struct Model {
     pub upper_id: i64,
     pub upper_name: String,
     pub title: Option<String>,
+    pub path: Option<String>,
     pub pub_time: DateTime,
     pub content: String,
     pub raw_json: String,

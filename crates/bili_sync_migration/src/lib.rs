@@ -14,6 +14,7 @@ mod m20260324_055217_add_staff;
 mod m20260616_000001_add_dynamic_posts_config;
 mod m20260616_000002_create_dynamic_post_tables;
 mod m20260616_000003_add_dynamic_post_title;
+mod m20260617_000001_add_dynamic_post_path;
 
 pub struct Migrator;
 
@@ -35,6 +36,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260616_000001_add_dynamic_posts_config::Migration),
             Box::new(m20260616_000002_create_dynamic_post_tables::Migration),
             Box::new(m20260616_000003_add_dynamic_post_title::Migration),
+            Box::new(m20260617_000001_add_dynamic_post_path::Migration),
         ]
     }
 }

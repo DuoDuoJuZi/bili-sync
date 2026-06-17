@@ -249,6 +249,21 @@ pub async fn update_dynamic_post_image_local_path(
     Ok(active_model.update(connection).await?)
 }
 
+pub async fn update_dynamic_post_path(
+    post_id: i32,
+    path: String,
+    connection: &DatabaseConnection,
+) -> Result<dynamic_post::Model> {
+    let now = chrono::Utc::now().naive_utc();
+    let active_model = dynamic_post::ActiveModel {
+        id: Set(post_id),
+        path: Set(Some(path)),
+        updated_at: Set(now),
+        ..Default::default()
+    };
+    Ok(active_model.update(connection).await?)
+}
+
 fn usize_to_u32_saturating(value: usize) -> u32 {
     value.try_into().unwrap_or(u32::MAX)
 }
