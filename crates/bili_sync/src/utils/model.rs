@@ -31,6 +31,19 @@ pub async fn list_dynamic_posts_with_images(
         .context("list dynamic posts with images failed")
 }
 
+pub async fn get_latest_dynamic_post_pub_time(
+    source_id: i32,
+    connection: &DatabaseConnection,
+) -> Result<Option<chrono::NaiveDateTime>> {
+    Ok(dynamic_post::Entity::find()
+        .filter(dynamic_post::Column::SourceId.eq(source_id))
+        .order_by_desc(dynamic_post::Column::PubTime)
+        .one(connection)
+        .await
+        .context("get latest dynamic post pub time failed")?
+        .map(|post| post.pub_time))
+}
+
 /// 筛选未填充的视频
 pub async fn filter_unfilled_videos(
     additional_expr: SimpleExpr,
@@ -258,6 +271,21 @@ pub async fn update_dynamic_post_path(
     let active_model = dynamic_post::ActiveModel {
         id: Set(post_id),
         path: Set(Some(path)),
+        updated_at: Set(now),
+        ..Default::default()
+    };
+    Ok(active_model.update(connection).await?)
+}
+
+pub async fn update_dynamic_post_download_status(
+    post_id: i32,
+    download_status: u32,
+    connection: &DatabaseConnection,
+) -> Result<dynamic_post::Model> {
+    let now = chrono::Utc::now().naive_utc();
+    let active_model = dynamic_post::ActiveModel {
+        id: Set(post_id),
+        download_status: Set(download_status),
         updated_at: Set(now),
         ..Default::default()
     };

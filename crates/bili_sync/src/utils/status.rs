@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use bili_sync_entity::{page, video};
+use bili_sync_entity::{dynamic_post, page, video};
 use bili_sync_migration::{ExprTrait, IntoCondition};
 use sea_orm::sea_query::Expr;
 use sea_orm::{ColumnTrait, Condition};
@@ -201,6 +201,15 @@ pub type PageStatus = Status<5, page::Column>;
 impl PageStatus {
     pub fn query_builder() -> StatusQueryBuilder<{ Self::LEN }, page::Column> {
         StatusQueryBuilder::new(page::Column::DownloadStatus)
+    }
+}
+
+/// 包含两个子任务，从前到后分别是：动态图文图片、动态图文详情文件
+pub type DynamicPostStatus = Status<2, dynamic_post::Column>;
+
+impl DynamicPostStatus {
+    pub fn query_builder() -> StatusQueryBuilder<{ Self::LEN }, dynamic_post::Column> {
+        StatusQueryBuilder::new(dynamic_post::Column::DownloadStatus)
     }
 }
 

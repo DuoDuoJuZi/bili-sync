@@ -23,14 +23,15 @@ use crate::notifier::DownloadNotifyInfo;
 use crate::utils::download_context::DownloadContext;
 use crate::utils::format_arg::{page_format_args, video_format_args};
 use crate::utils::model::{
-    create_pages, create_videos, filter_unfilled_videos, filter_unhandled_video_pages, list_dynamic_posts_with_images,
-    save_dynamic_posts, update_dynamic_post_image_local_path, update_dynamic_post_path, update_pages_model,
-    update_videos_model,
+    create_pages, create_videos, filter_unfilled_videos, filter_unhandled_video_pages,
+    get_latest_dynamic_post_pub_time, list_dynamic_posts_with_images, save_dynamic_posts,
+    update_dynamic_post_download_status, update_dynamic_post_image_local_path, update_dynamic_post_path,
+    update_pages_model, update_videos_model,
 };
 use crate::utils::nfo::{NFO, ToNFO};
 use crate::utils::notify::notify;
 use crate::utils::rule::FieldEvaluatable;
-use crate::utils::status::{PageStatus, STATUS_OK, VideoStatus};
+use crate::utils::status::{DynamicPostStatus, PageStatus, STATUS_NOT_STARTED, STATUS_OK, VideoStatus};
 
 /// 完整地处理某个视频来源
 pub async fn process_video_source(
@@ -83,7 +84,7 @@ async fn process_dynamic_posts(
     connection: &DatabaseConnection,
     config: &Config,
 ) -> Result<()> {
-    let posts = refresh_dynamic_posts(bili_client, submission, config).await?;
+    let posts = refresh_dynamic_posts(bili_client, submission, connection, config).await?;
     fill_dynamic_posts(submission, &posts, connection).await?;
     if ARGS.scan_only {
         warn!("已开启仅扫描模式，跳过动态图文下载..");
@@ -95,15 +96,22 @@ async fn process_dynamic_posts(
 async fn refresh_dynamic_posts(
     bili_client: &BiliClient,
     submission: &submission::Model,
+    connection: &DatabaseConnection,
     config: &Config,
 ) -> Result<Vec<DynamicPost>> {
     let source_name = submission.display_name();
+    let latest_pub_time = get_latest_dynamic_post_pub_time(submission.id, connection).await?;
     info!("开始扫描{}动态..", source_name);
-    let posts: Vec<DynamicPost> = Dynamic::new(bili_client, submission.upper_id.to_string(), &config.credential)
-        .into_post_stream()
-        .try_collect::<Vec<_>>()
-        .await?;
-    info!("扫描{}动态完成，获取到 {} 条动态", source_name, posts.len());
+    let mut stream =
+        Box::pin(Dynamic::new(bili_client, submission.upper_id.to_string(), &config.credential).into_post_stream());
+    let mut posts = Vec::new();
+    while let Some(post) = stream.try_next().await? {
+        if latest_pub_time.is_some_and(|latest_pub_time| post.pub_time.naive_utc() <= latest_pub_time) {
+            break;
+        }
+        posts.push(post);
+    }
+    info!("扫描{}动态完成，获取到 {} 条新动态", source_name, posts.len());
     for post in &posts {
         debug!(
             "扫描到{}动态：dynamic_id={}，发布时间={}，图片数量={}",
@@ -211,7 +219,10 @@ async fn download_unprocessed_dynamic_posts(
     for (post, images) in &mut dynamic_posts {
         let target = dynamic_post_output_target(&base_path, post).await?;
         *post = update_dynamic_post_path(post.id, target.path.to_string_lossy().to_string(), connection).await?;
+        let mut status = dynamic_post_status_for_processing(&target.path, post, images).await;
+        let separate_status = status.should_run();
         let image_result = fetch_dynamic_post_images(
+            separate_status[0],
             &target.display_name,
             &target.path,
             images,
@@ -229,9 +240,7 @@ async fn download_unprocessed_dynamic_posts(
             bail!(e);
         }
 
-        let should_generate_files =
-            dynamic_post_files_need_processing(&target.path).await || !matches!(image_result, ExecutionStatus::Skipped);
-        let file_result = generate_dynamic_post_files(should_generate_files, &target.path, post, images)
+        let file_result = generate_dynamic_post_files(separate_status[1], &target.path, post, images)
             .await
             .into();
         log_dynamic_post_task_status(&target.display_name, "详情", &file_result);
@@ -241,6 +250,8 @@ async fn download_unprocessed_dynamic_posts(
         {
             bail!(e);
         }
+        status.update_status(&[image_result, file_result]);
+        *post = update_dynamic_post_download_status(post.id, status.into(), connection).await?;
     }
     info!("下载{}动态完成", source_name);
     Ok(())
@@ -253,6 +264,13 @@ async fn filter_unhandled_dynamic_posts(
     let dynamic_posts = list_dynamic_posts_with_images(source_id, connection).await?;
     let mut unhandled_dynamic_posts = Vec::new();
     for (post, images) in dynamic_posts {
+        if dynamic_post_artifacts_complete(&post, &images).await {
+            let status = DynamicPostStatus::from([STATUS_OK, STATUS_OK]);
+            if post.download_status != u32::from(status) {
+                update_dynamic_post_download_status(post.id, status.into(), connection).await?;
+            }
+            continue;
+        }
         if dynamic_post_needs_processing(&post, &images).await {
             unhandled_dynamic_posts.push((post, images));
         }
@@ -265,7 +283,11 @@ async fn dynamic_post_needs_processing(post: &dynamic_post::Model, images: &[dyn
         return true;
     };
     let post_path = PathBuf::from(path);
-    dynamic_post_files_need_processing(&post_path).await || dynamic_post_images_need_processing(post, images).await
+    dynamic_post_status_for_processing(&post_path, post, images)
+        .await
+        .should_run()
+        .into_iter()
+        .any(|should_run| should_run)
 }
 
 async fn dynamic_post_files_need_processing(post_path: &Path) -> bool {
@@ -273,11 +295,7 @@ async fn dynamic_post_files_need_processing(post_path: &Path) -> bool {
         || !fs::try_exists(post_path.join("index.md")).await.unwrap_or(false)
 }
 
-async fn dynamic_post_images_need_processing(post: &dynamic_post::Model, images: &[dynamic_post_image::Model]) -> bool {
-    let Some(path) = post.path.as_deref().filter(|path| !path.trim().is_empty()) else {
-        return true;
-    };
-    let post_path = PathBuf::from(path);
+async fn dynamic_post_images_need_processing(post_path: &Path, images: &[dynamic_post_image::Model]) -> bool {
     for (idx, image) in images.iter().enumerate() {
         let relative_path = image
             .local_path
@@ -290,7 +308,32 @@ async fn dynamic_post_images_need_processing(post: &dynamic_post::Model, images:
     false
 }
 
+async fn dynamic_post_artifacts_complete(post: &dynamic_post::Model, images: &[dynamic_post_image::Model]) -> bool {
+    let Some(path) = post.path.as_deref().filter(|path| !path.trim().is_empty()) else {
+        return false;
+    };
+    let post_path = PathBuf::from(path);
+    !dynamic_post_files_need_processing(&post_path).await
+        && !dynamic_post_images_need_processing(&post_path, images).await
+}
+
+async fn dynamic_post_status_for_processing(
+    post_path: &Path,
+    post: &dynamic_post::Model,
+    images: &[dynamic_post_image::Model],
+) -> DynamicPostStatus {
+    let mut status = DynamicPostStatus::from(post.download_status);
+    if dynamic_post_images_need_processing(post_path, images).await {
+        status.set(0, STATUS_NOT_STARTED);
+    }
+    if dynamic_post_files_need_processing(post_path).await {
+        status.set(1, STATUS_NOT_STARTED);
+    }
+    status
+}
+
 async fn fetch_dynamic_post_images(
+    should_run: bool,
     dynamic_display_name: &str,
     post_path: &Path,
     images: &mut [dynamic_post_image::Model],
@@ -298,6 +341,9 @@ async fn fetch_dynamic_post_images(
     connection: &DatabaseConnection,
     config: &Config,
 ) -> Result<ExecutionStatus> {
+    if !should_run {
+        return Ok(ExecutionStatus::Skipped);
+    }
     let mut stats = DynamicPostImageDownloadStats::default();
     sort_dynamic_post_images(images);
     fs::create_dir_all(post_path.join("images")).await?;

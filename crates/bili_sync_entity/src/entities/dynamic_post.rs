@@ -17,6 +17,7 @@ pub struct Model {
     pub content: String,
     pub raw_json: String,
     pub image_count: u32,
+    pub download_status: u32,
     pub created_at: DateTime,
     pub updated_at: DateTime,
 }
