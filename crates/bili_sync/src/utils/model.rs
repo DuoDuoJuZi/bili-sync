@@ -218,33 +218,37 @@ async fn upsert_dynamic_post_images(
     post: &DynamicPost,
     connection: &DatabaseConnection,
 ) -> Result<usize> {
-    let mut created_count = 0;
-    for image in &post.images {
-        let exists = dynamic_post_image::Entity::find()
-            .filter(
-                dynamic_post_image::Column::DynamicPostId
-                    .eq(dynamic_post_id)
-                    .and(dynamic_post_image::Column::Url.eq(image.url.as_str())),
-            )
-            .one(connection)
-            .await?
-            .is_some();
-        if exists {
-            continue;
-        }
-        dynamic_post_image::ActiveModel {
+    if post.images.is_empty() {
+        return Ok(0);
+    }
+    let images = post
+        .images
+        .iter()
+        .map(|image| dynamic_post_image::ActiveModel {
             dynamic_post_id: Set(dynamic_post_id),
             url: Set(image.url.clone()),
             width: Set(u64_to_u32_saturating(image.width)),
             height: Set(u64_to_u32_saturating(image.height)),
             local_path: Set(None),
             ..Default::default()
-        }
-        .insert(connection)
+        })
+        .collect::<Vec<_>>();
+    let result = dynamic_post_image::Entity::insert_many(images)
+        .on_conflict(
+            OnConflict::columns([
+                dynamic_post_image::Column::DynamicPostId,
+                dynamic_post_image::Column::Url,
+            ])
+            .do_nothing()
+            .to_owned(),
+        )
+        .do_nothing()
+        .exec_without_returning(connection)
         .await?;
-        created_count += 1;
-    }
-    Ok(created_count)
+    Ok(match result {
+        sea_orm::TryInsertResult::Inserted(rows_affected) => usize::try_from(rows_affected).unwrap_or(usize::MAX),
+        sea_orm::TryInsertResult::Empty | sea_orm::TryInsertResult::Conflicted => 0,
+    })
 }
 
 pub async fn update_dynamic_post_image_local_path(

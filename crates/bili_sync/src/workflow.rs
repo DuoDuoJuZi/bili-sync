@@ -21,6 +21,7 @@ use crate::downloader::Downloader;
 use crate::error::ExecutionStatus;
 use crate::notifier::DownloadNotifyInfo;
 use crate::utils::download_context::DownloadContext;
+use crate::utils::filenamify::filenamify;
 use crate::utils::format_arg::{page_format_args, video_format_args};
 use crate::utils::model::{
     create_pages, create_videos, filter_unfilled_videos, filter_unhandled_video_pages,
@@ -550,7 +551,7 @@ async fn dynamic_post_output_target(base_path: &Path, post: &dynamic_post::Model
             path,
         });
     }
-    if let Some(title) = post.title.as_deref().and_then(sanitize_dynamic_post_title) {
+    if let Some(title) = post.title.as_deref().and_then(dynamic_post_base_name_from_title) {
         return resolve_dynamic_post_output_target(base_path, &title, post, false).await;
     }
     let fallback_name = post.pub_time.format("%Y-%m-%d_%H-%M-%S").to_string();
@@ -598,33 +599,13 @@ async fn can_use_dynamic_post_path(path: &Path, dynamic_id: &str) -> Result<bool
     Ok(identity.dynamic_id == dynamic_id)
 }
 
-fn sanitize_dynamic_post_title(title: &str) -> Option<String> {
-    let mut result = String::new();
-    let mut last_was_whitespace = false;
-    for ch in title.trim().chars() {
-        let replacement = if ch.is_control() || matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') {
-            Some('_')
-        } else if ch.is_whitespace() {
-            Some(' ')
-        } else {
-            None
-        };
-        let ch = replacement.unwrap_or(ch);
-        if ch == ' ' {
-            if last_was_whitespace {
-                continue;
-            }
-            last_was_whitespace = true;
-        } else {
-            last_was_whitespace = false;
-        }
-        if result.chars().count() >= 80 {
-            break;
-        }
-        result.push(ch);
+fn dynamic_post_base_name_from_title(title: &str) -> Option<String> {
+    let title = title.trim();
+    if title.is_empty() {
+        return None;
     }
-    let result = result.trim_end_matches(['.', ' ']).trim().to_string();
-    if result.is_empty() { None } else { Some(result) }
+    let name = filenamify(title).chars().take(80).collect::<String>();
+    if name.trim().is_empty() { None } else { Some(name) }
 }
 
 fn dynamic_post_image_relative_path(idx: usize, url: &str) -> String {
